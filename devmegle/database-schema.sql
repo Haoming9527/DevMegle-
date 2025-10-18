@@ -1,5 +1,5 @@
 -- DevMegle+ Database Schema
--- This file contains the SQL schema for setting up the Supabase database
+-- Updated: added expires_at to sessions and improved cleanup logic
 
 -- Sessions table - stores active collaboration sessions
 CREATE TABLE IF NOT EXISTS sessions (
@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   matched_at TIMESTAMP WITH TIME ZONE,
   ended_at TIMESTAMP WITH TIME ZONE,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  -- NEW: expires_at for automatic cleanup and session expiry
+  expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '24 hours')
 );
 
 -- Codes table - stores the shared code content for each session
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS git_repos (
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_codes_session_id ON codes(session_id);
 CREATE INDEX IF NOT EXISTS idx_connection_logs_session_id ON connection_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_ai_interactions_session_id ON ai_interactions(session_id);
@@ -86,31 +89,38 @@ BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 -- Create triggers for updated_at
-CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_codes_updated_at BEFORE UPDATE ON codes FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_sessions_updated_at
+BEFORE UPDATE ON sessions
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Function to clean up expired sessions (run this periodically)
+CREATE TRIGGER update_codes_updated_at
+BEFORE UPDATE ON codes
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to clean up expired sessions and repos (run periodically)
 CREATE OR REPLACE FUNCTION cleanup_expired_sessions()
 RETURNS void AS $$
 BEGIN
-    -- Delete sessions older than 24 hours
-    DELETE FROM sessions WHERE created_at < NOW() - INTERVAL '24 hours';
-    
+    -- Delete sessions that have expired
+    DELETE FROM sessions WHERE expires_at < NOW();
+
     -- Delete git repos that have expired
     DELETE FROM git_repos WHERE expires_at < NOW();
 END;
 $$ LANGUAGE plpgsql;
 
--- Insert some sample data for testing
-INSERT INTO sessions (id, created_by, status) VALUES 
+-- Sample data for testing
+INSERT INTO sessions (id, created_by, status)
+VALUES 
 ('sample_session_1', 'user1', 'waiting'),
 ('sample_session_2', 'user2', 'waiting')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO codes (session_id, content, language) VALUES 
+INSERT INTO codes (session_id, content, language)
+VALUES 
 ('sample_session_1', '// Welcome to DevMegle+!\nconsole.log("Hello, World!");', 'javascript'),
 ('sample_session_2', '// Another session\nfunction greet() {\n  return "Hello from DevMegle+!";\n}', 'javascript')
 ON CONFLICT (session_id) DO NOTHING;
