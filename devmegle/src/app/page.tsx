@@ -39,7 +39,10 @@ export default function LandingPage() {
     document.body.appendChild(featherScript);
 
     featherScript.onload = () => {
-      (window as unknown as { feather: { replace: () => void } }).feather.replace();
+      // Check if feather is available before calling replace
+      if (window.feather && typeof window.feather.replace === 'function') {
+        window.feather.replace();
+      }
     };
 
     return () => {
@@ -47,9 +50,52 @@ export default function LandingPage() {
     }
   }, []);
 
-  const handlePairMe = () => {
-    // In a real app, this would call the pairing logic
-    router.push('/session/new');
+  const handlePairMe = async () => {
+    try {
+      // Show loading state
+      const button = document.querySelector('button');
+      if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-feather="loader" class="w-6 h-6 animate-spin"></i><span>Finding Partner...</span>';
+      }
+
+      // Create meeting session
+      const response = await fetch('/api/meeting/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'anonymous', // In production, get from auth
+          preferences: {
+            languages: ['javascript', 'typescript', 'python'],
+            experience: 'intermediate'
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        if (data.matched) {
+          // Instantly matched - go to session
+          router.push(`/session/${data.session.id}`);
+        } else {
+          // Waiting for partner - show waiting screen
+          router.push(`/session/${data.session.id}?waiting=true`);
+        }
+      } else {
+        throw new Error(data.error || 'Failed to create session');
+      }
+    } catch (error) {
+      console.error('Pairing error:', error);
+      alert('Failed to find a partner. Please try again.');
+      
+      // Reset button
+      const button = document.querySelector('button');
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = '<i data-feather="zap" class="w-6 h-6"></i><span>Pair Me Instantly</span>';
+      }
+    }
   };
 
   return (
