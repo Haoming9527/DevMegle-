@@ -1,7 +1,5 @@
 "use client";
 
-import React from 'react';
-
 interface SocialConnectorsProps {
   sessionId: string;
   partner: {
@@ -12,60 +10,65 @@ interface SocialConnectorsProps {
   };
 }
 
-const SocialConnectors: React.FC<SocialConnectorsProps> = ({ sessionId, partner }) => {
+function safeHandle(value?: string) {
+  return (value || "anonymous-dev").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "anonymous-dev";
+}
+
+export default function SocialConnectors({ sessionId, partner }: SocialConnectorsProps) {
   const logConnection = async (connector: string) => {
-    await fetch('/api/logConnection', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    await fetch("/api/logConnection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId,
-        fromUser: 'current_user_placeholder', // Replace with actual user ID
-        toUser: 'partner_user_placeholder', // Replace with actual partner ID
+        fromUser: "current-room-user",
+        toUser: safeHandle(partner.github_handle || partner.linkedin_handle),
         connector,
       }),
     });
   };
 
-  const connectViaLinkedIn = () => {
-    if (partner.linkedin_handle) {
-      window.open(`https://www.linkedin.com/in/${partner.linkedin_handle}`, '_blank');
-      logConnection('linkedin');
-    }
+  const openProfile = (connector: "linkedin" | "github" | "instagram") => {
+    const handle = safeHandle(
+      connector === "linkedin"
+        ? partner.linkedin_handle
+        : connector === "github"
+          ? partner.github_handle
+          : partner.instagram_handle
+    );
+    const url =
+      connector === "linkedin"
+        ? `https://www.linkedin.com/in/${handle}`
+        : connector === "github"
+          ? `https://github.com/${handle}`
+          : `https://www.instagram.com/${handle}`;
+
+    window.open(url, "_blank", "noopener,noreferrer");
+    logConnection(connector).catch(() => undefined);
   };
 
-  const connectViaSlack = () => {
-    if (partner.slack_handle) {
-      navigator.clipboard.writeText(partner.slack_handle);
-      alert('Slack handle copied to clipboard!');
-      logConnection('slack');
-    }
-  };
-
-  const connectViaGitHub = () => {
-    if (partner.github_handle) {
-      window.open(`https://github.com/${partner.github_handle}`, '_blank');
-      logConnection('github');
-    }
-  };
-
-  const connectViaInstagram = () => {
-    if (partner.instagram_handle) {
-      window.open(`https://www.instagram.com/${partner.instagram_handle}`, '_blank');
-      logConnection('instagram');
-    }
+  const copySlack = async () => {
+    await navigator.clipboard.writeText(safeHandle(partner.slack_handle));
+    await logConnection("slack");
   };
 
   return (
-    <div className="p-4 border border-gray-700 rounded-lg bg-gray-800">
-      <h3 className="font-bold mb-2 text-white">Keep in touch?</h3>
-      <div className="flex flex-col space-y-2">
-        <button onClick={connectViaLinkedIn} className="px-4 py-2 bg-blue-700 text-white rounded hover:bg-blue-800 transition">Connect on LinkedIn</button>
-        <button onClick={connectViaSlack} className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition">Invite via Slack</button>
-        <button onClick={connectViaGitHub} className="px-4 py-2 bg-gray-900 text-white rounded hover:bg-black transition">Follow on GitHub</button>
-        <button onClick={connectViaInstagram} className="px-4 py-2 bg-pink-600 text-white rounded hover:bg-pink-700 transition">Message on Instagram</button>
+    <section className="rounded-md border border-zinc-800 bg-zinc-900 p-4">
+      <h3 className="font-bold text-zinc-50">Reconnect</h3>
+      <div className="mt-3 grid gap-2">
+        <button onClick={() => openProfile("github")} className="rounded-md bg-zinc-100 px-3 py-2 text-sm font-bold text-zinc-950">
+          GitHub
+        </button>
+        <button onClick={() => openProfile("linkedin")} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-100">
+          LinkedIn
+        </button>
+        <button onClick={copySlack} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-100">
+          Copy Slack
+        </button>
+        <button onClick={() => openProfile("instagram")} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-100">
+          Instagram
+        </button>
       </div>
-    </div>
+    </section>
   );
-};
-
-export default SocialConnectors;
+}

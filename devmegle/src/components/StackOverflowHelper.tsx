@@ -1,45 +1,40 @@
 "use client";
 
-import React, { useState } from 'react';
+import { useState } from "react";
 
 interface StackOverflowHelperProps {
   codeSnippet: string;
 }
 
-const StackOverflowHelper: React.FC<StackOverflowHelperProps> = ({ codeSnippet }) => {
-  const [question, setQuestion] = useState('');
+export default function StackOverflowHelper({ codeSnippet }: StackOverflowHelperProps) {
+  const [question, setQuestion] = useState("");
 
-  const askAIAboutCodeSnippet = async (code: string, userQuestion: string) => {
-    // In a real implementation, this would call the Groq or Gemini API
-    console.log("Asking AI about:", { code, userQuestion });
-    alert("AI summarization is a placeholder. Opening Stack Overflow instead.");
-    const query = encodeURIComponent(`${userQuestion} ${code}`);
-    window.open(`https://stackoverflow.com/search?q=${query}`, '_blank');
+  const search = () => {
+    const query = encodeURIComponent(`${question || "debug this code"} ${codeSnippet.slice(0, 600)}`);
+    window.open(`https://stackoverflow.com/search?q=${query}`, "_blank", "noopener,noreferrer");
   };
 
-  const handleAsk = () => {
-    if (question.trim()) {
-      askAIAboutCodeSnippet(codeSnippet, question);
-    }
+  const copySnippet = async () => {
+    await navigator.clipboard.writeText(codeSnippet);
   };
 
   return (
-    <div className="p-4 border border-gray-700 rounded-lg mt-4 bg-gray-800">
-      <h3 className="font-bold mb-2 text-white">Need help?</h3>
+    <section className="rounded-md border border-zinc-800 bg-zinc-900 p-4">
+      <h3 className="font-bold text-zinc-50">Debug trail</h3>
       <textarea
         value={question}
-        onChange={(e) => setQuestion(e.target.value)}
-        className="w-full p-2 border border-gray-600 rounded bg-gray-700 text-white"
-        placeholder="Ask a question about the code..."
+        onChange={(event) => setQuestion(event.target.value)}
+        className="mt-3 min-h-24 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm text-zinc-50 outline-none focus:border-emerald-400"
+        placeholder="Question about the last snippet"
       />
-      <button
-        onClick={handleAsk}
-        className="mt-2 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 transition"
-      >
-        Ask AI / Stack Overflow
-      </button>
-    </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button onClick={copySnippet} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-100">
+          Copy code
+        </button>
+        <button onClick={search} className="rounded-md bg-amber-300 px-3 py-2 text-sm font-bold text-zinc-950">
+          Search
+        </button>
+      </div>
+    </section>
   );
-};
-
-export default StackOverflowHelper;
+}

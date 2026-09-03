@@ -1,296 +1,339 @@
 "use client";
 
-import { useState, use, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import CodeEditor from '@/components/Editor';
-import SessionEndModal from '@/components/SessionEndModal';
-import SessionMonitor from '@/components/SessionMonitor';
-import AIChat from '@/components/AIChat';
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import AIChat from "@/components/AIChat";
+import CodeEditor from "@/components/Editor";
+import MeetStage from "@/components/MeetStage";
+import SessionEndModal from "@/components/SessionEndModal";
+import SessionMonitor from "@/components/SessionMonitor";
 
-interface SessionData {
+type SessionStatus = "waiting" | "active" | "ended";
+
+type SessionData = {
   id: string;
-  status: 'waiting' | 'active' | 'ended';
-  partner_id?: string;
+  status: SessionStatus;
+  created_by: string;
+  partner_id?: string | null;
   partner?: {
+    id: string;
     created_by: string;
-    preferences?: any;
+    synthetic?: boolean;
+    preferences?: {
+      handle?: string;
+      languages?: string[];
+      goal?: string;
+    };
+  } | null;
+  preferences?: {
+    handle?: string;
+    languages?: string[];
+    goal?: string;
   };
   code?: {
     content: string;
     language: string;
-  };
+    updated_at: string;
+  } | null;
   created_at: string;
   matched_at?: string;
-}
+  ended_at?: string;
+};
 
-export default function SessionPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
-  const params = use(paramsPromise);
+type RepoExport = {
+  repoUrl: string;
+  localPath: string;
+  vscodeUri: string;
+  commands: string[];
+  commitHash: string;
+};
+
+export default function SessionPage() {
+  const params = useParams<{ id: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [code, setCode] = useState('');
+  const sessionId = params.id;
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
+  const [code, setCode] = useState("");
+  const [language, setLanguage] = useState("typescript");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [repoExport, setRepoExport] = useState<RepoExport | null>(null);
+  const [notice, setNotice] = useState("");
+
+  const handle = useMemo(() => {
+    return sessionData?.preferences?.handle || sessionData?.created_by || "anonymous-dev";
+  }, [sessionData?.created_by, sessionData?.preferences?.handle]);
+
+  const fetchSessionData = useCallback(async () => {
+    const response = await fetch(`/api/meeting/session?sessionId=${encodeURIComponent(sessionId)}`);
+    if (!response.ok) throw new Error("Session not found");
+
+    const data = (await response.json()) as { success?: boolean; session?: SessionData };
+    if (!data.success || !data.session) throw new Error("Session not found");
+
+    setSessionData(data.session);
+    setIsWaiting(data.session.status === "waiting");
+
+    if (data.session.code) {
+      setCode((current) => current || data.session?.code?.content || "");
+      setLanguage(data.session.code.language || "typescript");
+    }
+  }, [sessionId]);
 
   useEffect(() => {
-    const featherScript = document.createElement('script');
-    featherScript.src = 'https://unpkg.com/feather-icons';
-    document.body.appendChild(featherScript);
-
-    featherScript.onload = () => {
-      // Check if feather is available before calling replace
-      if (window.feather && typeof window.feather.replace === 'function') {
-        window.feather.replace();
-      }
-    };
-
-    // Check if we're in waiting mode
-    const waiting = searchParams.get('waiting') === 'true';
+    const waiting = new URLSearchParams(window.location.search).get("waiting") === "true";
     setIsWaiting(waiting);
+    fetchSessionData()
+      .catch(() => setNotice("This room no longer exists."))
+      .finally(() => setHasLoaded(true));
+  }, [fetchSessionData]);
 
-    // Fetch session data
-    fetchSessionData();
-
-    return () => {
-      if (document.body.contains(featherScript)) {
-        document.body.removeChild(featherScript);
-      }
-    }
-  }, [params.id, searchParams]);
-
-  const fetchSessionData = async () => {
-    try {
-      const response = await fetch(`/api/meeting/session?sessionId=${params.id}`);
-      const data = await response.json();
-      
-      if (data.success) {
-        setSessionData(data.session);
-        if (data.session.code) {
-          setCode(data.session.code.content);
-        }
-        
-        // If we were waiting and now have a partner, update state
-        if (data.session.status === 'active' && isWaiting) {
-          setIsWaiting(false);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch session data:', error);
-    }
+  const copyInvite = async () => {
+    await navigator.clipboard.writeText(window.location.href);
+    setNotice("Invite link copied.");
   };
 
+  const exportRepo = async () => {
+    setNotice("Preparing repo pack...");
+    const response = await fetch("/api/git/repo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        code,
+        commitMessage: `DevMegle checkpoint ${new Date().toLocaleString()}`,
+      }),
+    });
 
-  const commitToGit = async () => {
-    try {
-      const response = await fetch('/api/git/repo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: params.id,
-          code: code,
-          commitMessage: `DevMegle+ collaboration - ${new Date().toLocaleString()}`
-        })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        alert(`Code committed to temporary repo: ${data.repo.repoUrl}`);
-      } else {
-        alert(data.fallback || 'Failed to commit to Git');
-      }
-    } catch (error) {
-      console.error('Git commit failed:', error);
-      alert('Failed to commit to Git');
+    const data = (await response.json()) as { success?: boolean; repo?: RepoExport; error?: string };
+    if (!data.success || !data.repo) {
+      setNotice(data.error || "Repo export failed.");
+      return;
     }
+
+    setRepoExport(data.repo);
+    setNotice("Repo pack is ready.");
   };
 
   const handleEndSession = async () => {
-    try {
-      // End the session
-      await fetch(`/api/meeting/session?sessionId=${params.id}`, {
-        method: 'DELETE'
-      });
-      
-      // Get the latest code for the modal
-      const last20Lines = code.split('\n').slice(-20).join('\n');
-      setCode(last20Lines);
-      setIsModalOpen(true);
-    } catch (error) {
-      console.error('Failed to end session:', error);
-      alert('Failed to end session properly');
-    }
+    await fetch(`/api/meeting/session?sessionId=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    setIsModalOpen(true);
+    setSessionData((current) => (current ? { ...current, status: "ended", ended_at: new Date().toISOString() } : current));
   };
 
-  const handleNextDev = () => {
-    if (confirm('Are you sure you want to find a new partner? This will end the current session.')) {
-      handleEndSession();
-      router.push('/');
+  const handleNextDev = async () => {
+    const response = await fetch("/api/meeting/next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, userId: handle }),
+    });
+
+    const data = (await response.json()) as { success?: boolean; matched?: boolean; session?: { id: string } };
+    if (data.success && data.session) {
+      router.push(`/session/${data.session.id}?waiting=${!data.matched}`);
+      return;
     }
+
+    router.push("/");
   };
 
-  const handleReport = () => {
-    if (confirm('Report this session? This will end the session and flag it for review.')) {
-      // In production, this would call a report API
-      alert('Session reported. Thank you for helping keep DevMegle+ safe.');
-      handleEndSession();
-    }
+  const handleReport = async () => {
+    await fetch(`/api/meeting/session?sessionId=${encodeURIComponent(sessionId)}&reason=reported`, { method: "DELETE" });
+    setNotice("Room reported and closed.");
+    setIsModalOpen(true);
   };
 
-  const handlePartnerMatched = (partnerData: any) => {
+  const handlePartnerMatched = () => {
     setIsWaiting(false);
-    // Refresh session data to get partner info
-    fetchSessionData();
+    fetchSessionData().catch(() => undefined);
   };
 
   const handleSessionEnded = () => {
-    alert('Your partner has ended the session.');
-    router.push('/');
+    setNotice("This room has ended.");
+    setIsModalOpen(true);
   };
 
-  // Mock partner data for social connectors
+  const handleSessionWaiting = () => {
+    setIsWaiting(true);
+    fetchSessionData().catch(() => undefined);
+  };
+
+  const partnerName = sessionData?.partner?.preferences?.handle || sessionData?.partner?.created_by || "waiting";
   const partner = {
-    linkedin_handle: sessionData?.partner?.created_by || 'anonymous',
-    slack_handle: 'U12345678',
-    github_handle: sessionData?.partner?.created_by || 'anonymous',
-    instagram_handle: 'anonymous',
+    id: sessionData?.partner?.id ?? sessionData?.partner_id ?? null,
+    name: partnerName,
+    synthetic: sessionData?.partner?.synthetic,
   };
+  const startedAt = sessionData?.created_at ? new Date(sessionData.created_at).toLocaleTimeString() : "--";
 
-  // Show waiting screen if no partner yet
-  if (isWaiting || (sessionData && sessionData.status === 'waiting')) {
+  if (!hasLoaded && !sessionData) {
     return (
-      <div className="bg-gray-900 text-white min-h-screen flex flex-col">
-        <header className="bg-gray-800 border-b border-gray-700 py-4">
-          <div className="container mx-auto px-4 flex justify-between items-center">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-lime-500 rounded-full flex items-center justify-center">
-                <i data-feather="code" className="text-black w-4 h-4"></i>
-              </div>
-              <h1 className="text-xl font-bold text-white">DevMegle+</h1>
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6 text-zinc-50">
+        <div className="max-w-md border border-zinc-800 bg-zinc-900 p-6">
+          <p className="text-xs uppercase tracking-[0.22em] text-emerald-300">DevMegle</p>
+          <h1 className="mt-2 text-2xl font-bold">Opening room</h1>
+          <p className="mt-2 text-zinc-400">Loading the room contract and shared code buffer.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (notice === "This room no longer exists.") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6 text-zinc-50">
+        <div className="max-w-md border border-zinc-800 bg-zinc-900 p-6">
+          <h1 className="text-2xl font-bold">Room missing</h1>
+          <p className="mt-2 text-zinc-400">The session was not found on this dev server.</p>
+          <button onClick={() => router.push("/")} className="mt-5 rounded-md bg-emerald-400 px-4 py-2 font-bold text-zinc-950">
+            Back to DevMegle
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (isWaiting) {
+    return (
+      <main className="flex min-h-screen flex-col bg-zinc-950 text-zinc-50">
+        <header className="border-b border-zinc-800 px-4 py-4">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-emerald-300">DevMegle</p>
+              <h1 className="text-xl font-bold">Waiting for a developer</h1>
             </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-400">Session ID: {params.id}</span>
-              <button onClick={() => router.push('/')} className="bg-gray-600 text-white px-4 py-2 rounded-full hover:bg-gray-700 transition flex items-center space-x-2">
-                <span>Cancel</span>
-                <i data-feather="x" className="w-4 h-4"></i>
-              </button>
-            </div>
+            <button onClick={() => router.push("/")} className="rounded-md border border-zinc-700 px-4 py-2 text-sm font-semibold">
+              Cancel
+            </button>
           </div>
         </header>
 
-        <main className="flex-grow flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-24 h-24 bg-lime-500 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse">
-              <i data-feather="users" className="text-black w-12 h-12"></i>
-            </div>
-            <h2 className="text-3xl font-bold mb-4">Finding Your Coding Partner...</h2>
-            <p className="text-gray-400 mb-8">We're searching for another developer to pair with you</p>
-            <div className="flex justify-center space-x-2">
-              <div className="w-2 h-2 bg-lime-500 rounded-full animate-bounce"></div>
-              <div className="w-2 h-2 bg-lime-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-              <div className="w-2 h-2 bg-lime-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-            </div>
-            <p className="text-sm text-gray-500 mt-4">This usually takes less than 30 seconds</p>
+        <section className="mx-auto flex flex-1 max-w-3xl flex-col items-center justify-center px-6 text-center">
+          <div className="mb-6 h-24 w-24 animate-pulse rounded-md bg-emerald-400 shadow-[8px_8px_0_#22d3ee]" />
+          <h2 className="text-4xl font-black">Queue is live</h2>
+          <p className="mt-3 max-w-xl text-zinc-400">
+            Keep this tab open. The first compatible stranger lands in this room automatically.
+          </p>
+          <div className="mt-8 flex flex-wrap justify-center gap-3">
+            <button onClick={copyInvite} className="rounded-md bg-zinc-100 px-4 py-2 font-bold text-zinc-950">
+              Copy invite
+            </button>
+            <button onClick={handleNextDev} className="rounded-md border border-zinc-700 px-4 py-2 font-bold text-zinc-100">
+              Requeue
+            </button>
           </div>
-        </main>
-      </div>
+        </section>
+
+        <SessionMonitor
+          sessionId={sessionId}
+          onPartnerMatched={handlePartnerMatched}
+          onSessionEnded={handleSessionEnded}
+          onWaiting={handleSessionWaiting}
+        />
+      </main>
     );
   }
 
   return (
-    <div className="bg-gray-900 text-white min-h-screen flex flex-col">
-      <header className="bg-gray-800 border-b border-gray-700 py-4">
-        <div className="container mx-auto px-4 flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-lime-500 rounded-full flex items-center justify-center">
-              <i data-feather="code" className="text-black w-4 h-4"></i>
-            </div>
-            <h1 className="text-xl font-bold text-white">DevMegle+</h1>
-            {sessionData?.partner && (
-              <span className="text-sm text-gray-400 ml-4">
-                Paired with: {sessionData.partner.created_by}
-              </span>
-            )}
+    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-50">
+      <header className="border-b border-zinc-800 bg-zinc-950">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.22em] text-emerald-300">DevMegle room</p>
+            <h1 className="truncate text-xl font-bold">
+              {handle} with {partnerName}
+            </h1>
           </div>
-          <div className="flex items-center space-x-4">
-            <button onClick={commitToGit} className="bg-green-600 text-white px-4 py-2 rounded-full hover:bg-green-700 transition flex items-center space-x-2">
-              <span>Commit to Git</span>
-              <i data-feather="git-commit" className="w-4 h-4"></i>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={copyInvite} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold hover:border-emerald-400">
+              Invite
             </button>
-            <span className="text-sm text-gray-400">Session: {params.id}</span>
-            <button onClick={handleEndSession} className="bg-red-600 text-white px-4 py-2 rounded-full hover:bg-red-700 transition flex items-center space-x-2">
-              <span>End Session</span>
-              <i data-feather="log-out" className="w-4 h-4"></i>
+            <button onClick={exportRepo} className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-bold text-zinc-950 hover:bg-cyan-200">
+              Repo pack
+            </button>
+            <button onClick={handleNextDev} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold hover:border-amber-400">
+              Next dev
+            </button>
+            <button onClick={handleEndSession} className="rounded-md bg-red-500 px-3 py-2 text-sm font-bold text-white hover:bg-red-400">
+              End
             </button>
           </div>
         </div>
       </header>
 
-      <main className="flex-grow flex">
-        <div className="flex-1">
-          <CodeEditor sessionId={params.id} />
+      {notice && (
+        <div className="border-b border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-200">
+          {notice}
         </div>
-        <aside className="w-80 bg-gray-800 border-l border-gray-700 flex flex-col">
-          {/* AI Chat Section */}
-          <div className="flex-1 flex flex-col">
-            <div className="p-4 border-b border-gray-700">
-              <h2 className="text-xl font-bold mb-2 flex items-center">
-                <i data-feather="cpu" className="w-5 h-5 mr-2"></i>
-                AI Copilot
-              </h2>
-              <p className="text-sm text-gray-400">Chat with Groq AI for code help</p>
-            </div>
-            <div className="flex-1">
-              <AIChat sessionId={params.id} currentCode={code} />
-            </div>
-          </div>
+      )}
 
-          {/* Session Controls */}
-          <div className="p-4 border-t border-gray-700">
-            <h3 className="font-semibold mb-3">Session Controls</h3>
-            <div className="flex flex-col space-y-2">
-              <button 
-                onClick={handleNextDev}
-                className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 transition text-sm"
-              >
-                Next Dev
-              </button>
-              <button 
-                onClick={handleReport}
-                className="px-4 py-2 bg-red-600 rounded hover:bg-red-700 transition text-sm"
-              >
-                Report
-              </button>
-            </div>
-            
-            {/* Session Info */}
-            <div className="mt-4 pt-4 border-t border-gray-600">
-              <h4 className="font-semibold mb-2 text-sm">Session Info</h4>
-              <div className="text-xs text-gray-400 space-y-1">
-                <p>Status: {sessionData?.status || 'Loading...'}</p>
-                <p>Started: {sessionData?.created_at ? new Date(sessionData.created_at).toLocaleTimeString() : 'Unknown'}</p>
-                {sessionData?.matched_at && (
-                  <p>Matched: {new Date(sessionData.matched_at).toLocaleTimeString()}</p>
-                )}
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <CodeEditor
+          sessionId={sessionId}
+          value={code}
+          language={language}
+          handle={handle}
+          onChange={setCode}
+          onLanguageChange={setLanguage}
+        />
+
+        <aside className="flex min-h-0 flex-col border-l border-zinc-800 bg-zinc-950">
+          <div className="border-b border-zinc-800 p-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-md bg-zinc-900 p-3">
+                <p className="text-zinc-500">Status</p>
+                <p className="font-semibold text-emerald-300">{sessionData?.status ?? "loading"}</p>
+              </div>
+              <div className="rounded-md bg-zinc-900 p-3">
+                <p className="text-zinc-500">Started</p>
+                <p className="font-semibold">{startedAt}</p>
               </div>
             </div>
+            <button onClick={handleReport} className="mt-3 w-full rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold hover:border-red-400">
+              Report room
+            </button>
           </div>
+
+          <MeetStage sessionId={sessionId} selfName={handle} partner={partner} onNotice={setNotice} />
+
+          {repoExport && (
+            <div className="border-b border-zinc-800 bg-zinc-900 p-4 text-sm">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="font-semibold text-zinc-100">Repo pack</p>
+                <a href={repoExport.vscodeUri} className="text-cyan-300 hover:text-cyan-200">
+                  VS Code
+                </a>
+              </div>
+              <p className="break-all text-zinc-400">{repoExport.localPath}</p>
+              <a href={repoExport.repoUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-emerald-300 hover:text-emerald-200">
+                Open GitHub initializer
+              </a>
+            </div>
+          )}
+
+          <AIChat sessionId={sessionId} handle={handle} code={code} />
         </aside>
-      </main>
+      </div>
 
       <SessionEndModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        sessionId={params.id}
-        partner={partner}
-        codeSnippet={code}
+        sessionId={sessionId}
+        partner={{
+          linkedin_handle: partnerName,
+          github_handle: partnerName,
+          slack_handle: partnerName,
+          instagram_handle: partnerName,
+        }}
+        codeSnippet={code.split("\n").slice(-24).join("\n")}
       />
 
-      {/* Real-time session monitoring */}
       <SessionMonitor
-        sessionId={params.id}
+        sessionId={sessionId}
         onPartnerMatched={handlePartnerMatched}
         onSessionEnded={handleSessionEnded}
+        onWaiting={handleSessionWaiting}
       />
-    </div>
+    </main>
   );
 }

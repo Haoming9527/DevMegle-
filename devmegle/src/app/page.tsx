@@ -1,181 +1,250 @@
 "use client";
 
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { getBrowserId } from "@/lib/browser-identity";
+import { useAuth } from "@/lib/auth";
+
+type MatchMode = "human" | "forge";
+
+type Stats = {
+  waiting: number;
+  active: number;
+  ended: number;
+  rooms: number;
+};
+
+const LANGUAGES = ["typescript", "python", "go", "rust", "sql", "react"];
 
 export default function LandingPage() {
   const router = useRouter();
+  const { user } = useAuth();
+  const [handle, setHandle] = useState("");
+  const [goal, setGoal] = useState("Ship a prototype in 30 minutes");
+  const [languages, setLanguages] = useState<string[]>(["typescript", "react"]);
+  const [mode, setMode] = useState<MatchMode>("human");
+  const [isPairing, setIsPairing] = useState(false);
+  const [stats, setStats] = useState<Stats>({ waiting: 0, active: 0, ended: 0, rooms: 0 });
 
   useEffect(() => {
-    // Dynamically load Vanta.js and Feather Icons scripts
-    const threeScript = document.createElement('script');
-    threeScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js';
-    document.body.appendChild(threeScript);
+    const savedHandle = window.localStorage.getItem("devmegle:handle");
+    if (savedHandle) setHandle(savedHandle);
 
-    threeScript.onload = () => {
-      const vantaScript = document.createElement('script');
-      vantaScript.src = 'https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.globe.min.js';
-      document.body.appendChild(vantaScript);
-
-      vantaScript.onload = () => {
-        (window as unknown as { VANTA: { GLOBE: (options: unknown) => void } }).VANTA.GLOBE({
-          el: "#vanta-bg",
-          mouseControls: true,
-          touchControls: true,
-          gyroControls: false,
-          minHeight: 200.00,
-          minWidth: 200.00,
-          scale: 1.00,
-          scaleMobile: 1.00,
-          color: 0x84cc16,
-          backgroundColor: 0xffffff,
-          size: 0.8
-        });
-      };
-    };
-
-    const featherScript = document.createElement('script');
-    featherScript.src = 'https://unpkg.com/feather-icons';
-    document.body.appendChild(featherScript);
-
-    featherScript.onload = () => {
-      // Check if feather is available before calling replace
-      if (window.feather && typeof window.feather.replace === 'function') {
-        window.feather.replace();
-      }
-    };
-
-    return () => {
-      // In a real app, you'd want to handle script removal more carefully
+    async function loadStats() {
+      const response = await fetch("/api/meeting/stats");
+      if (!response.ok) return;
+      const data = (await response.json()) as { stats?: Stats };
+      if (data.stats) setStats(data.stats);
     }
+
+    loadStats().catch(() => undefined);
+    const interval = window.setInterval(() => loadStats().catch(() => undefined), 5000);
+    return () => window.clearInterval(interval);
   }, []);
 
-  const handlePairMe = async () => {
-    try {
-      // Show loading state
-      const button = document.querySelector('button');
-      if (button) {
-        button.disabled = true;
-        button.innerHTML = '<i data-feather="loader" class="w-6 h-6 animate-spin"></i><span>Finding Partner...</span>';
-      }
+  const selectedHandle = useMemo(() => {
+    return (handle.trim() || user?.email?.split("@")[0] || "anonymous-dev").slice(0, 40);
+  }, [handle, user?.email]);
 
-      // Create meeting session
-      const response = await fetch('/api/meeting/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+  const toggleLanguage = (language: string) => {
+    setLanguages((current) => {
+      if (current.includes(language)) return current.filter((item) => item !== language);
+      return [...current, language].slice(0, 5);
+    });
+  };
+
+  const startPairing = async (matchMode: MatchMode) => {
+    setIsPairing(true);
+    const handleInput = document.getElementById("devmegle-handle") as HTMLInputElement | null;
+    const liveHandle = (handleInput?.value.trim() || selectedHandle).slice(0, 40);
+    window.localStorage.setItem("devmegle:handle", liveHandle);
+
+    try {
+      const response = await fetch("/api/meeting/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: 'anonymous', // In production, get from auth
+          userId: getBrowserId(),
           preferences: {
-            languages: ['javascript', 'typescript', 'python'],
-            experience: 'intermediate'
-          }
-        })
+            handle: liveHandle,
+            accountId: user?.id,
+            languages: languages.length ? languages : ["typescript"],
+            experience: "builder",
+            goal,
+            matchMode,
+          },
+        }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        success?: boolean;
+        matched?: boolean;
+        session?: { id: string };
+        error?: string;
+      };
 
-      if (data.success) {
-        if (data.matched) {
-          // Instantly matched - go to session
-          router.push(`/session/${data.session.id}`);
-        } else {
-          // Waiting for partner - show waiting screen
-          router.push(`/session/${data.session.id}?waiting=true`);
-        }
-      } else {
-        throw new Error(data.error || 'Failed to create session');
+      if (!data.success || !data.session) {
+        throw new Error(data.error || "Pairing failed");
       }
+
+      router.push(`/session/${data.session.id}?waiting=${!data.matched}`);
     } catch (error) {
-      console.error('Pairing error:', error);
-      alert('Failed to find a partner. Please try again.');
-      
-      // Reset button
-      const button = document.querySelector('button');
-      if (button) {
-        button.disabled = false;
-        button.innerHTML = '<i data-feather="zap" class="w-6 h-6"></i><span>Pair Me Instantly</span>';
-      }
+      console.error("Pairing error:", error);
+      setIsPairing(false);
     }
   };
 
   return (
-    <div className="bg-white min-h-screen flex flex-col">
-      <div id="vanta-bg" className="absolute top-0 left-0 w-full h-full z-[-1] opacity-30"></div>
-      
-      <header className="border-b border-gray-200 py-4">
-        <div className="container mx-auto px-4 flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-lime-500 rounded-full flex items-center justify-center">
-              <i data-feather="code" className="text-black w-4 h-4"></i>
+    <main className="min-h-screen bg-stone-100 text-zinc-950">
+      <header className="border-b border-zinc-300 bg-stone-100/95">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+          <Link href="/" className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-zinc-950 font-mono text-sm font-bold text-emerald-300">
+              dm
             </div>
-            <h1 className="text-xl font-bold text-black">CodeChaos Connect</h1>
-          </div>
-          <nav>
-            <ul className="flex space-x-6">
-              <li><a href="#" className="text-gray-700 hover:text-lime-500 font-medium">How It Works</a></li>
-              <li><a href="#" className="text-gray-700 hover:text-lime-500 font-medium">Hack Mode</a></li>
-              <li><a href="#" className="text-gray-700 hover:text-lime-500 font-medium">AI Features</a></li>
-            </ul>
+            <div>
+              <p className="text-xl font-bold">DevMegle</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">stranger pair rooms</p>
+            </div>
+          </Link>
+          <nav className="flex items-center gap-2 text-sm">
+            <Link href="/dashboard" className="rounded-md px-3 py-2 font-medium text-zinc-700 hover:bg-white">
+              Dashboard
+            </Link>
+            {user ? (
+              <span className="hidden rounded-md bg-white px-3 py-2 text-zinc-600 sm:inline">{user.email}</span>
+            ) : (
+              <Link href="/auth/signin" className="rounded-md bg-zinc-950 px-3 py-2 font-semibold text-white">
+                Sign in
+              </Link>
+            )}
           </nav>
-          <button className="bg-black text-white px-4 py-2 rounded-full hover:bg-gray-800 transition flex items-center space-x-2">
-            <span>Sign In</span>
-            <i data-feather="log-in" className="w-4 h-4"></i>
-          </button>
         </div>
       </header>
 
-      <main className="flex-grow flex items-center justify-center">
-        <div className="container mx-auto px-4 text-center">
-          <div className="max-w-3xl mx-auto">
-            <h1 className="text-5xl font-bold text-black mb-6">Find Your <span className="text-lime-500">Coding Partner</span> in One Click</h1>
-            <p className="text-xl text-gray-600 mb-10">Random developer matching with live Git repos and AI copilots. Pair, code, and create something unexpected.</p>
-            
-            <div className="flex flex-col space-y-6 items-center">
-              <button onClick={handlePairMe} className="bg-lime-500 text-black px-8 py-4 rounded-full text-xl font-bold glow glow-hover hover:bg-lime-400 transition-all transform hover:scale-105 flex items-center space-x-3">
-                <i data-feather="zap" className="w-6 h-6"></i>
-                <span>Pair Me Instantly</span>
-              </button>
-              
-              <div className="flex space-x-4">
-                <div className="bg-white border border-gray-200 rounded-lg p-4 text-center w-40">
-                  <div className="w-12 h-12 bg-lime-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <i data-feather="git-branch" className="text-lime-500 w-5 h-5"></i>
-                  </div>
-                  <p className="font-medium text-sm">Live Git Sync</p>
-                </div>
-                <div className="bg-white border border-gray-200 rounded-lg p-4 text-center w-40">
-                  <div className="w-12 h-12 bg-lime-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <i data-feather="cpu" className="text-lime-500 w-5 h-5"></i>
-                  </div>
-                  <p className="font-medium text-sm">AI Copilots</p>
-                </div>
-                <div className="bg-white border border-gray-200 rounded-lg p-4 text-center w-40">
-                  <div className="w-12 h-12 bg-lime-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <i data-feather="clock" className="text-lime-500 w-5 h-5"></i>
-                  </div>
-                  <p className="font-medium text-sm">Ephemeral</p>
-                </div>
+      <section className="mx-auto grid min-h-[calc(100vh-73px)] max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
+        <div className="flex flex-col justify-center">
+          <p className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-700">developer roulette</p>
+          <h1 className="max-w-3xl text-5xl font-black leading-[0.95] tracking-normal text-zinc-950 sm:text-6xl lg:text-7xl">
+            DevMegle
+          </h1>
+          <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-700">
+            Drop into a live coding room, share one buffer, ask Ada for backup, and export the result as a GitHub-ready repo pack.
+          </p>
+
+          <div className="mt-8 grid grid-cols-3 gap-3">
+            <div className="border-l-4 border-emerald-500 bg-white p-4">
+              <p className="text-3xl font-black">{stats.waiting}</p>
+              <p className="text-sm text-zinc-500">waiting</p>
+            </div>
+            <div className="border-l-4 border-cyan-500 bg-white p-4">
+              <p className="text-3xl font-black">{stats.active}</p>
+              <p className="text-sm text-zinc-500">active</p>
+            </div>
+            <div className="border-l-4 border-amber-500 bg-white p-4">
+              <p className="text-3xl font-black">{stats.rooms}</p>
+              <p className="text-sm text-zinc-500">rooms</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center">
+          <form
+            className="w-full border border-zinc-300 bg-white p-5 shadow-sm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              startPairing(mode).catch(() => setIsPairing(false));
+            }}
+          >
+            <div className="flex items-center justify-between gap-4 border-b border-zinc-200 pb-4">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">launch room</p>
+                <h2 className="text-2xl font-bold">Match console</h2>
+              </div>
+              <div className="rounded-md bg-zinc-950 px-3 py-2 font-mono text-xs text-emerald-300">live</div>
+            </div>
+
+            <label className="mt-5 block">
+              <span className="text-sm font-semibold text-zinc-700">Handle</span>
+              <input
+                id="devmegle-handle"
+                value={handle}
+                onChange={(event) => setHandle(event.target.value)}
+                placeholder="anonymous-dev"
+                className="mt-2 w-full rounded-md border border-zinc-300 bg-stone-50 px-3 py-3 outline-none transition focus:border-emerald-500 focus:bg-white"
+              />
+            </label>
+
+            <label className="mt-4 block">
+              <span className="text-sm font-semibold text-zinc-700">Mission</span>
+              <input
+                value={goal}
+                onChange={(event) => setGoal(event.target.value)}
+                className="mt-2 w-full rounded-md border border-zinc-300 bg-stone-50 px-3 py-3 outline-none transition focus:border-emerald-500 focus:bg-white"
+              />
+            </label>
+
+            <div className="mt-5">
+              <p className="text-sm font-semibold text-zinc-700">Stack</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {LANGUAGES.map((language) => {
+                  const selected = languages.includes(language);
+                  return (
+                    <button
+                      key={language}
+                      type="button"
+                      onClick={() => toggleLanguage(language)}
+                      className={`rounded-md border px-3 py-2 text-sm font-medium transition ${
+                        selected
+                          ? "border-zinc-950 bg-zinc-950 text-white"
+                          : "border-zinc-300 bg-stone-50 text-zinc-700 hover:border-emerald-500"
+                      }`}
+                    >
+                      {language}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          </div>
-        </div>
-      </main>
 
-      <footer className="border-t border-gray-200 py-6">
-        <div className="container mx-auto px-4">
-          <div className="flex flex-col md:flex-row justify-between items-center">
-            <div className="flex items-center space-x-2 mb-4 md:mb-0">
-              <div className="w-6 h-6 bg-lime-500 rounded-full"></div>
-              <span className="text-sm text-gray-600">© 2023 CodeChaos Connect</span>
+            <div className="mt-5 grid grid-cols-2 gap-2 rounded-md bg-stone-100 p-1">
+              <button
+                type="button"
+                onClick={() => setMode("human")}
+                className={`rounded px-3 py-2 text-sm font-semibold ${mode === "human" ? "bg-white shadow-sm" : "text-zinc-600"}`}
+              >
+                Human
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("forge")}
+                className={`rounded px-3 py-2 text-sm font-semibold ${mode === "forge" ? "bg-white shadow-sm" : "text-zinc-600"}`}
+              >
+                Forge
+              </button>
             </div>
-            <div className="flex space-x-4">
-              <a href="#" className="text-gray-600 hover:text-lime-500"><i data-feather="github"></i></a>
-              <a href="#" className="text-gray-600 hover:text-lime-500"><i data-feather="twitter"></i></a>
-              <a href="#" className="text-gray-600 hover:text-lime-500"><i data-feather="discord"></i></a>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="submit"
+                disabled={isPairing}
+                className="rounded-md bg-emerald-400 px-5 py-3 font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isPairing ? "Pairing..." : mode === "human" ? "Find a dev" : "Start forge"}
+              </button>
+              <button
+                type="button"
+                onClick={() => startPairing("forge").catch(() => setIsPairing(false))}
+                disabled={isPairing}
+                className="rounded-md border border-zinc-300 px-5 py-3 font-bold text-zinc-800 transition hover:border-cyan-500 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Ada room
+              </button>
             </div>
-          </div>
+          </form>
         </div>
-      </footer>
-    </div>
+      </section>
+    </main>
   );
 }

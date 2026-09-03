@@ -1,82 +1,64 @@
 "use client";
 
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useEffect, useRef } from "react";
 
 interface SessionMonitorProps {
   sessionId: string;
-  onPartnerMatched: (partnerData: any) => void;
+  onPartnerMatched: (partnerData: { partnerId: string; matchedAt?: string }) => void;
   onSessionEnded: () => void;
+  onWaiting?: () => void;
 }
 
-const SessionMonitor: React.FC<SessionMonitorProps> = ({ 
-  sessionId, 
-  onPartnerMatched, 
-  onSessionEnded 
-}) => {
-  const [isMonitoring, setIsMonitoring] = useState(false);
+export default function SessionMonitor({ sessionId, onPartnerMatched, onSessionEnded, onWaiting }: SessionMonitorProps) {
+  const lastStatusRef = useRef<string>("");
 
   useEffect(() => {
     if (!sessionId) return;
 
-    setIsMonitoring(true);
+    let active = true;
 
-    // Set up real-time subscription for session updates
-    const channel = supabase.channel(`session-monitor:${sessionId}`);
+    async function poll() {
+      try {
+        const response = await fetch(`/api/meeting/session?sessionId=${encodeURIComponent(sessionId)}`);
+        if (!response.ok) return;
 
-    channel
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'sessions',
-        filter: `id=eq.${sessionId}`
-      }, (payload) => {
-        const session = payload.new;
-        
-        if (session.status === 'active' && session.partner_id) {
-          // Partner matched!
+        const data = (await response.json()) as {
+          success?: boolean;
+          session?: { status: string; partner_id?: string | null; matched_at?: string };
+        };
+
+        if (!active || !data.success || !data.session) return;
+        const statusKey = `${data.session.status}:${data.session.partner_id ?? ""}`;
+        if (statusKey === lastStatusRef.current) return;
+        lastStatusRef.current = statusKey;
+
+        if (data.session.status === "active" && data.session.partner_id) {
           onPartnerMatched({
-            partnerId: session.partner_id,
-            matchedAt: session.matched_at
+            partnerId: data.session.partner_id,
+            matchedAt: data.session.matched_at,
           });
-        } else if (session.status === 'ended') {
-          // Session ended
+        }
+
+        if (data.session.status === "waiting") {
+          onWaiting?.();
+        }
+
+        if (data.session.status === "ended") {
           onSessionEnded();
         }
-      })
-      .subscribe();
-
-    // Also poll for updates every 5 seconds as a fallback
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch(`/api/meeting/session?sessionId=${sessionId}`);
-        const data = await response.json();
-        
-        if (data.success && data.session) {
-          const session = data.session;
-          
-          if (session.status === 'active' && session.partner_id) {
-            onPartnerMatched({
-              partnerId: session.partner_id,
-              matchedAt: session.matched_at
-            });
-          } else if (session.status === 'ended') {
-            onSessionEnded();
-          }
-        }
-      } catch (error) {
-        console.error('Session polling error:', error);
+      } catch {
+        return;
       }
-    }, 5000);
+    }
+
+    poll();
+    const interval = window.setInterval(poll, 2500);
 
     return () => {
-      supabase.removeChannel(channel);
-      clearInterval(pollInterval);
-      setIsMonitoring(false);
+      active = false;
+      window.clearInterval(interval);
     };
-  }, [sessionId, onPartnerMatched, onSessionEnded]);
+  }, [onPartnerMatched, onSessionEnded, onWaiting, sessionId]);
 
-  return null; // This component doesn't render anything
-};
-
-export default SessionMonitor;
+  return null;
+}

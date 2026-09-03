@@ -1,20 +1,29 @@
-import { supabase } from '@/lib/supabase';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
+import { logConnection } from "@/lib/devmegle-store";
 
 export async function POST(req: NextRequest) {
-  const { sessionId, fromUser, toUser, connector } = await req.json();
+  try {
+    const body = (await req.json()) as {
+      sessionId?: unknown;
+      fromUser?: unknown;
+      toUser?: unknown;
+      connector?: unknown;
+    };
 
-  if (!sessionId || !fromUser || !toUser || !connector) {
-    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!body.sessionId || !body.connector) {
+      return NextResponse.json({ error: "sessionId and connector are required" }, { status: 400 });
+    }
+
+    const data = logConnection({
+      sessionId: body.sessionId,
+      fromUser: body.fromUser,
+      toUser: body.toUser,
+      connector: body.connector,
+    });
+
+    return NextResponse.json({ success: true, data });
+  } catch (error) {
+    console.error("Connection log error:", error);
+    return NextResponse.json({ error: "Invalid connection log request" }, { status: 400 });
   }
-
-  const { data, error } = await supabase
-    .from('connection_logs')
-    .insert([{ session_id: sessionId, from_user: fromUser, to_user: toUser, connector }]);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ success: true, data }, { status: 200 });
 }

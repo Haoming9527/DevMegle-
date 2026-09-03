@@ -1,8 +1,7 @@
 "use client";
 
-import React from 'react';
-import SocialConnectors from './SocialConnectors';
-import StackOverflowHelper from './StackOverflowHelper';
+import SocialConnectors from "./SocialConnectors";
+import StackOverflowHelper from "./StackOverflowHelper";
 
 interface SessionEndModalProps {
   isOpen: boolean;
@@ -17,24 +16,27 @@ interface SessionEndModalProps {
   codeSnippet: string;
 }
 
-const SessionEndModal: React.FC<SessionEndModalProps> = ({ isOpen, onClose, sessionId, partner, codeSnippet }) => {
+export default function SessionEndModal({ isOpen, onClose, sessionId, partner, codeSnippet }: SessionEndModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-      <div className="bg-gray-900 text-white p-6 rounded-lg max-w-md w-full border border-gray-700">
-        <h2 className="text-2xl font-bold mb-4">Session Ended</h2>
-        <SocialConnectors sessionId={sessionId} partner={partner} />
-        <StackOverflowHelper codeSnippet={codeSnippet} />
-        <button
-          onClick={onClose}
-          className="mt-4 px-4 py-2 bg-gray-600 rounded hover:bg-gray-700 w-full transition"
-        >
-          Close
-        </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-md border border-zinc-700 bg-zinc-950 p-5 text-zinc-50 shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-zinc-800 pb-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-emerald-300">session closed</p>
+            <h2 className="text-2xl font-bold">Keep the useful bits</h2>
+          </div>
+          <button onClick={onClose} className="rounded-md border border-zinc-700 px-3 py-2 text-sm font-semibold hover:border-zinc-400">
+            Close
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <SocialConnectors sessionId={sessionId} partner={partner} />
+          <StackOverflowHelper codeSnippet={codeSnippet} />
+        </div>
       </div>
     </div>
   );
-};
-
-export default SessionEndModal;
+}
